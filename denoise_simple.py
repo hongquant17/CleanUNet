@@ -50,18 +50,23 @@ from util import rescale, find_max_epoch, print_size, sampling
 from network import CleanUNet
 import torchaudio
 
+import librosa
+import soundfile as sf
+
+import os
+
 def load_simple(filename):
     audio, _ = torchaudio.load(filename)
     return audio
     
 
 
-def denoise(files, ckpt_path, batch_size):
+def denoise(ckpt_path, batch_size, input_folder, output_folder):
     """
     Denoise audio
 
     Parameters:
-    output_directory (str):         save generated speeches to this path
+    output_directory (str):         save generated sp   eeches to this path
     ckpt_iter (int or 'max'):       the pretrained checkpoint to be loaded; 
                                     automitically selects the maximum iteration if 'max' is selected
     subset (str):                   training, testing, validation
@@ -76,8 +81,6 @@ def denoise(files, ckpt_path, batch_size):
     loader_config = deepcopy(trainset_config)
     loader_config["crop_length_sec"] = 0
 
-
-
     # predefine model
     net = CleanUNet(**network_config).cuda()
     print_size(net)
@@ -87,12 +90,22 @@ def denoise(files, ckpt_path, batch_size):
     net.load_state_dict(checkpoint['model_state_dict'])
     net.eval()
 
-    # inference
-    for file_path in tqdm(files):
-        file_name = os.path.basename(file_path)
+    # List all WAV files in the input folder
+    wav_files = [f for f in os.listdir(input_folder) if f.endswith(".wav")]
+
+    # Iterate through all WAV files in the folder
+    for wav_file in tqdm(wav_files):
+        # Construct the full path to the input file
+        input_file_path = os.path.join(input_folder, wav_file)
+
+        # Construct the full path for the denoised output file
+        output_file_path = os.path.join(output_folder, wav_file[:-4] + "_denoised.wav")
+
+        # Process the audio as in your original code
+        file_name = os.path.basename(input_file_path)
         file_dir = os.path.dirname(file_name)
         new_file_name = file_name + "_denoised.wav"
-        noisy_audio = load_simple(file_path).cuda()
+        noisy_audio = load_simple(input_file_path).cuda()
         LENGTH = len(noisy_audio[0].squeeze())
         noisy_audio = torch.chunk(noisy_audio, LENGTH // batch_size + 1, dim=1)
         all_audio = []
@@ -103,13 +116,14 @@ def denoise(files, ckpt_path, batch_size):
                     generated_audio = sampling(net, batch)
                     generated_audio = generated_audio.cpu().numpy().squeeze()
                     all_audio.append(generated_audio)
-        
+
         all_audio = np.concatenate(all_audio, axis=0)
-        save_file = os.path.join(file_dir, new_file_name)
-        print("saved to:", save_file)
-        wavwrite(save_file, 
-                32000,
-                all_audio.squeeze())
+
+        # Save the denoised audio to the output folder
+        os.makedirs(output_folder, exist_ok=True)
+        wavwrite(output_file_path, 16000, all_audio.squeeze())
+
+        print("Saved to:", output_file_path)
 
 
 
@@ -121,7 +135,11 @@ if __name__ == "__main__":
                         help='Path to the checkpoint you want to use')     
     parser.add_argument('-b', '--batch_size', type=int, help='chunk your input audio vector into chunks of batch_size. not exact.', default=100_000)
 
-    parser.add_argument('files', nargs=argparse.REMAINDER)
+    # parser.add_argument('files', nargs=argparse.REMAINDER)
+    parser.add_argument('-i', '--input_folder', type=str,
+                        help='Input folder containing audio files')
+    parser.add_argument('-o', '--output_folder', type=str,
+                        help='Output folder where processed files will be saved')
 
     args = parser.parse_args()
 
@@ -136,12 +154,15 @@ if __name__ == "__main__":
     train_config            = config["train_config"]        # train config
     global trainset_config
     trainset_config         = config["trainset_config"]     # to read trainset configurations
-    files = args.files
-    bs = args.batch_size
-
-
+    #files = args.files
+    
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True
 
-    denoise(files,args.ckpt_path, batch_size=bs)
+    bs = args.batch_size
+    input_folder = args.input_folder
+    output_folder = args.output_folder
+    ckpt_path = args.ckpt_path
+
+    denoise(ckpt_path, bs, input_folder, output_folder)
     
